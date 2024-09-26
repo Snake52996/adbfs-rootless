@@ -1,5 +1,5 @@
-CXXFLAGS=-Wall $(shell pkg-config fuse --cflags)
-LDFLAGS=-Wall $(shell pkg-config fuse --libs)
+CXXFLAGS=-Wall $(shell pkg-config fuse nettle --cflags)
+LDFLAGS=-Wall $(shell pkg-config fuse nettle --libs)
 
 TARGET=adbfs
 DESTDIR?=/
