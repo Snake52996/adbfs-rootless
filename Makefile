@@ -10,7 +10,7 @@ all:	$(TARGET)
 debug: CXXFLAGS += -DDEBUG -g
 debug: $(TARGET)
 
-adbfs.o: adbfs.cpp utils.h
+adbfs.o: adbfs.cpp utils.hh
 	$(CXX) -c -o adbfs.o adbfs.cpp $(CXXFLAGS) $(CPPFLAGS)
 
 $(TARGET): adbfs.o

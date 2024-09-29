@@ -72,14 +72,15 @@
  */
 
 #define FUSE_USE_VERSION 26
-#include "utils.h"
+#include "utils.hh"
 #include <unistd.h>
 
+#include <csignal>
+#include <cstddef>
 #include <execinfo.h>
 #include <grp.h>
+#include <map>
 #include <pwd.h>
-#include <signal.h>
-#include <stddef.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -92,18 +93,14 @@
 std::string to_local_path(const std::string &path) {
   sha3_224_ctx context;
   sha3_224_init(&context);
-  sha3_224_update(&context, path.length(),
-                  reinterpret_cast<const uint8_t *>(path.c_str()));
+  sha3_224_update(&context, path.length(), reinterpret_cast<const uint8_t *>(path.c_str()));
   uint8_t raw_digest[SHA3_224_DIGEST_SIZE];
   sha3_224_digest(&context, sizeof(raw_digest), raw_digest);
   // then encode it so that it can be safely used as filename
   base64_encode_ctx encoder;
   base64url_encode_init(&encoder);
-  std::string result(BASE64_ENCODE_LENGTH(sizeof(raw_digest)) +
-                         BASE64_ENCODE_FINAL_LENGTH,
-                     '\0');
-  size_t length = base64_encode_update(&encoder, result.data(),
-                                       sizeof(raw_digest), raw_digest);
+  std::string result(BASE64_ENCODE_LENGTH(sizeof(raw_digest)) + BASE64_ENCODE_FINAL_LENGTH, '\0');
+  size_t      length = base64_encode_update(&encoder, result.data(), sizeof(raw_digest), raw_digest);
   length += base64_encode_final(&encoder, result.data() + length);
   result.resize(length);
   std::cout << '[' << path << "] --> [" << result << "]\n";
@@ -111,7 +108,7 @@ std::string to_local_path(const std::string &path) {
 }
 
 void handler(int sig) {
-  void *array[10];
+  void  *array[10];
   size_t size;
 
   // get void*'s for all entries on the stack
@@ -125,8 +122,8 @@ void handler(int sig) {
 
 using namespace std;
 
-void shell_escape_command(string &);
-void adb_shell_escape_command(string &);
+void          shell_escape_command(string &);
+void          adb_shell_escape_command(string &);
 queue<string> adb_push(const string &, const string &);
 queue<string> adb_pull(const string &, const string &);
 queue<string> adb_shell(const string &, bool);
@@ -134,16 +131,16 @@ queue<string> shell(const string &);
 
 static const char PERMISSION_ERR_MSG[] = ": Permission denied";
 
-string tempDirPath;
+string                 tempDirPath;
 map<string, fileCache> fileData;
-void invalidateCache(const string &path) {
+void                   invalidateCache(const string &path) {
   cout << "invalidate cache " << path << endl;
   map<string, fileCache>::iterator it = fileData.find(path);
   if (it != fileData.end())
     fileData.erase(it);
 }
 
-map<int, bool> filePendingWrite;
+map<int, bool>    filePendingWrite;
 map<string, bool> fileTruncated;
 
 /**
@@ -154,8 +151,7 @@ struct adb_config {
   bool rescan;
 };
 
-static struct fuse_opt adb_opts[] = {
-    {"rescan", offsetof(struct adb_config, rescan), true}, FUSE_OPT_END};
+static struct fuse_opt adb_opts[] = {{"rescan", offsetof(struct adb_config, rescan), true}, FUSE_OPT_END};
 
 static struct adb_config adbfs_conf;
 
@@ -280,8 +276,7 @@ void makeTmpDir(void) {
    @see adb_pull.
    @see adb_push.
  */
-void adb_push_pull_cmd(string &cmd, const bool push, const string &local_path,
-                       const string &remote_path) {
+void adb_push_pull_cmd(string &cmd, const bool push, const string &local_path, const string &remote_path) {
   cmd.assign("adb ");
   cmd.append((push ? "push '" : "pull '"));
   cmd.append((push ? local_path : remote_path));
@@ -302,8 +297,7 @@ void adb_push_pull_cmd(string &cmd, const bool push, const string &local_path,
    @todo perhaps avoid or simplify shell-escaping.
    @bug problems with files with spaces in filenames (adb bug?)
  */
-queue<string> adb_pull(const string &remote_source,
-                       const string &local_destination) {
+queue<string> adb_pull(const string &remote_source, const string &local_destination) {
   string cmd;
   adb_push_pull_cmd(cmd, false, local_destination, remote_source);
   return exec_command(cmd);
@@ -317,8 +311,7 @@ queue<string> adb_pull(const string &remote_source,
    @see adb_push_pull_cmd.
    @bug problems with files with spaces in filenames (adb bug?)
  */
-queue<string> adb_push(const string &local_source,
-                       const string &remote_destination) {
+queue<string> adb_push(const string &local_source, const string &remote_destination) {
   string cmd;
   adb_push_pull_cmd(cmd, true, local_source, remote_destination);
   queue<string> res = exec_command(cmd);
@@ -343,8 +336,7 @@ queue<string> adb_rescan_file(const string &remote_path) {
  */
 queue<string> adb_rescan_dir_removed(const string &remote_path) {
   string cmd;
-  cmd.assign(
-      "am broadcast -a android.intent.action.MEDIA_UNMOUNTED -d 'file://");
+  cmd.assign("am broadcast -a android.intent.action.MEDIA_UNMOUNTED -d 'file://");
   cmd.append(remote_path);
   cmd.append("'");
   return adb_shell(cmd);
@@ -464,19 +456,18 @@ bool is_valid_ls_output(const string &file) {
 
 static int adb_getattr(const char *path, struct stat *stbuf) {
   cout << "adb_getattr" << endl;
-  int res = 0;
+  int            res = 0;
   struct passwd *foruid;
-  struct group *forgid;
+  struct group  *forgid;
   memset(stbuf, 0, sizeof(struct stat));
   queue<string> output;
-  string path_string;
+  string        path_string;
   path_string.assign(path);
   shell_escape_path(path_string);
   // TODO /caching?
   //
   vector<string> output_chunk;
-  if (fileData.find(path_string) == fileData.end() ||
-      fileData[path_string].timestamp + 30 < time(NULL)) {
+  if (fileData.find(path_string) == fileData.end() || fileData[path_string].timestamp + 30 < time(NULL)) {
     string command = "ls -l -a -d '";
     command.append(path_string);
     command.append("'");
@@ -484,13 +475,15 @@ static int adb_getattr(const char *path, struct stat *stbuf) {
     if (output.empty())
       return -EAGAIN; /* no phone */
     // error format: "/sbin/healthd: Permission denied"
-    if (output.front().length() > sizeof(PERMISSION_ERR_MSG) &&
-        (!output.front().compare(
-            output.front().length() - sizeof(PERMISSION_ERR_MSG) + 1,
-            sizeof(PERMISSION_ERR_MSG) - 1, PERMISSION_ERR_MSG))) {
+    if (output.front().length() > sizeof(PERMISSION_ERR_MSG)
+        && (!output.front().compare(
+          output.front().length() - sizeof(PERMISSION_ERR_MSG) + 1,
+          sizeof(PERMISSION_ERR_MSG) - 1,
+          PERMISSION_ERR_MSG
+        ))) {
       fileData[path_string].statOutput.erase();
     } else {
-      output_chunk = make_array(output.front());
+      output_chunk                     = make_array(output.front());
       fileData[path_string].statOutput = output.front();
     }
     fileData[path_string].timestamp = time(NULL);
@@ -538,8 +531,7 @@ static int adb_getattr(const char *path, struct stat *stbuf) {
   if (foruid)
     stbuf->st_uid = foruid->pw_uid; /* user ID of owner */
   else
-    stbuf->st_uid =
-        98; /* 98 has been chosen (poorly) so that it doesn't map to anything */
+    stbuf->st_uid = 98; /* 98 has been chosen (poorly) so that it doesn't map to anything */
 
   forgid = getgrnam(output_chunk[uid_offset + 2].c_str());
   if (forgid)
@@ -556,18 +548,17 @@ static int adb_getattr(const char *path, struct stat *stbuf) {
   switch (stbuf->st_mode & S_IFMT) {
   case S_IFBLK:
   case S_IFCHR:
-    stbuf->st_rdev = atoi(output_chunk[uid_offset + 3].c_str()) * 256 +
-                     atoi(output_chunk[uid_offset + 4].c_str());
+    stbuf->st_rdev =
+      atoi(output_chunk[uid_offset + 3].c_str()) * 256 + atoi(output_chunk[uid_offset + 4].c_str());
     stbuf->st_size = 0;
-    iDate = uid_offset + 5;
+    iDate          = uid_offset + 5;
     break;
 
     break;
 
   case S_IFREG:
-    stbuf->st_size =
-        atol(output_chunk[uid_offset + 3].c_str()); /* total size, in bytes */
-    iDate = uid_offset + 4;
+    stbuf->st_size = atol(output_chunk[uid_offset + 3].c_str()); /* total size, in bytes */
+    iDate          = uid_offset + 4;
     break;
 
   default:
@@ -576,35 +567,35 @@ static int adb_getattr(const char *path, struct stat *stbuf) {
   case S_IFLNK:
   case S_IFDIR:
     stbuf->st_size = 0;
-    iDate = uid_offset + 3;
-    if (output_chunk[iDate].find_first_of("-") == string::npos)
+    iDate          = uid_offset + 3;
+    if (output_chunk[iDate].find_first_of('-') == string::npos)
       ++iDate;
     break;
   }
 
   // du calculates sizes based on number of 512b blocks
   stbuf->st_blksize = 512;
-  stbuf->st_blocks = (stbuf->st_size + 256) / 512;
+  stbuf->st_blocks  = (stbuf->st_size + 256) / 512;
 
   // for (int k = 0; k < output_chunk.size(); ++k) cout << output_chunk[k] << "
   // "; cout << endl;
 
   vector<string> ymd = make_array(output_chunk[iDate], "-");
-  vector<string> hm = make_array(output_chunk[iDate + 1], ":");
+  vector<string> hm  = make_array(output_chunk[iDate + 1], ":");
 
   // for (int k = 0; k < ymd.size(); ++k) cout << ymd[k] << " ";
   // cout << endl;
   // for (int k = 0; k <  hm.size(); ++k) cout <<  hm[k] << " ";
   // cout << endl;
   struct tm ftime;
-  ftime.tm_year = atoi(ymd[0].c_str()) - 1900;
-  ftime.tm_mon = atoi(ymd[1].c_str()) - 1;
-  ftime.tm_mday = atoi(ymd[2].c_str());
-  ftime.tm_hour = atoi(hm[0].c_str());
-  ftime.tm_min = atoi(hm[1].c_str());
-  ftime.tm_sec = 0;
+  ftime.tm_year  = atoi(ymd[0].c_str()) - 1900;
+  ftime.tm_mon   = atoi(ymd[1].c_str()) - 1;
+  ftime.tm_mday  = atoi(ymd[2].c_str());
+  ftime.tm_hour  = atoi(hm[0].c_str());
+  ftime.tm_min   = atoi(hm[1].c_str());
+  ftime.tm_sec   = 0;
   ftime.tm_isdst = -1;
-  time_t now = mktime(&ftime);
+  time_t now     = mktime(&ftime);
   // cout << "after mktime" << endl;
 
   // long now = time(0);
@@ -635,8 +626,8 @@ size_t find_nth(int n, const string &substr, const string &corpus) {
    adbFS implementation of FUSE interface function fuse_operations.readdir.
    @todo check shell escaping.
  */
-static int adb_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-                       off_t offset, struct fuse_file_info *fi) {
+static int
+adb_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
   (void)offset;
   (void)fi;
   string path_string;
@@ -649,7 +640,7 @@ static int adb_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
   shell_escape_path(path_string);
 
   queue<string> output;
-  string command = "ls -l -a '";
+  string        command = "ls -l -a '";
   command.append(path_string);
   command.append("'");
   output = adb_shell(command);
@@ -663,37 +654,35 @@ static int adb_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
       // line separately
       if (!is_valid_ls_output(output.front())) {
         // error format: "lstat '//efs' failed: Permission denied"
-        if (output.front().length() > sizeof(PERMISSION_ERR_MSG) &&
-            (!output.front().compare(
-                output.front().length() - sizeof(PERMISSION_ERR_MSG) + 1,
-                sizeof(PERMISSION_ERR_MSG) - 1, PERMISSION_ERR_MSG))) {
-          size_t nameStart = output.front().rfind("/") + 1;
-          const string &fname_l = output.front().substr(
-              nameStart, output.front().find("' ") - nameStart);
+        if (output.front().length() > sizeof(PERMISSION_ERR_MSG)
+            && (!output.front().compare(
+              output.front().length() - sizeof(PERMISSION_ERR_MSG) + 1,
+              sizeof(PERMISSION_ERR_MSG) - 1,
+              PERMISSION_ERR_MSG
+            ))) {
+          size_t        nameStart = output.front().rfind("/") + 1;
+          const string &fname_l   = output.front().substr(nameStart, output.front().find("' ") - nameStart);
           cout << "Adding file:" << fname_l << ":" << endl;
           filler(buf, fname_l.c_str(), NULL, 0);
-          const string &path_string_c =
-              path_string + (path_string == "/" ? "" : "/") + fname_l;
+          const string &path_string_c = path_string + (path_string == "/" ? "" : "/") + fname_l;
 
-          cout << "caching " << path_string_c << " = " << output.front()
-               << endl;
+          cout << "caching " << path_string_c << " = " << output.front() << endl;
           fileData[path_string_c].statOutput.erase();
           fileData[path_string_c].timestamp = time(NULL);
           cout << "cached " << endl;
         }
       } else {
         // Start of filename = `ls -la` time separator + 4
-        size_t nameStart = output.front().find_first_of(":") + 4;
-        const string &fname_l = output.front().substr(nameStart);
-        const string fname_n = fname_l.substr(0, fname_l.find(" -> "));
+        size_t        nameStart = output.front().find_first_of(":") + 4;
+        const string &fname_l   = output.front().substr(nameStart);
+        const string  fname_n   = fname_l.substr(0, fname_l.find(" -> "));
         cout << "Adding file:" << fname_n << ":" << endl;
         filler(buf, fname_n.c_str(), NULL, 0);
-        const string path_string_c =
-            path_string + (path_string == "/" ? "" : "/") + fname_n;
+        const string path_string_c = path_string + (path_string == "/" ? "" : "/") + fname_n;
 
         cout << "caching " << path_string_c << " = " << output.front() << endl;
         fileData[path_string_c].statOutput = output.front();
-        fileData[path_string_c].timestamp = time(NULL);
+        fileData[path_string_c].timestamp  = time(NULL);
         cout << "cached " << endl;
       }
     }
@@ -720,11 +709,11 @@ static int adb_open(const char *path, struct fuse_file_info *fi) {
   cout << "-- adb_open --" << path_string << " " << local_path_string << "\n";
   if (!fileTruncated[path_string]) {
     queue<string> output;
-    string command = "ls -l -a -d '";
+    string        command = "ls -l -a -d '";
     command.append(path_string);
     command.append("'");
     cout << command << "\n";
-    output = adb_shell(command);
+    output                      = adb_shell(command);
     vector<string> output_chunk = make_array(output.front());
     if (!is_valid_ls_output(output_chunk[0])) {
       return -ENOENT;
@@ -745,8 +734,7 @@ static int adb_open(const char *path, struct fuse_file_info *fi) {
   return 0;
 }
 
-static int adb_read(const char *path, char *buf, size_t size, off_t offset,
-                    struct fuse_file_info *fi) {
+static int adb_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
   int fd;
   int res;
   fd = fi->fh; // open(local_path_string.c_str(), O_RDWR);
@@ -760,8 +748,8 @@ static int adb_read(const char *path, char *buf, size_t size, off_t offset,
   return res;
 }
 
-static int adb_write(const char *path, const char *buf, size_t size,
-                     off_t offset, struct fuse_file_info *fi) {
+static int
+adb_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
   // string path_string;
   // string local_path_string;
   // path_string.assign(path);
@@ -792,7 +780,7 @@ static int adb_flush(const char *path, struct fuse_file_info *fi) {
   shell_escape_path(local_path_string);
 
   int flags = fi->flags;
-  int fd = fi->fh;
+  int fd    = fi->fh;
   cout << "flag is: " << flags << "\n";
   invalidateCache(path_string);
   if (filePendingWrite[fd]) {
@@ -837,7 +825,7 @@ static int adb_utimens(const char *path, const struct timespec ts[2]) {
   shell_escape_path(path_string);
 
   queue<string> output;
-  string command = "touch '";
+  string        command = "touch '";
   command.append(path_string);
   command.append("'");
   cout << command << "\n";
@@ -856,7 +844,7 @@ static int adb_truncate(const char *path, off_t size) {
   string local_path_string;
   path_string.assign(path);
   fileData[path_string].timestamp = fileData[path_string].timestamp + 50;
-  local_path_string = tempDirPath;
+  local_path_string               = tempDirPath;
   local_path_string.append(to_local_path(path_string));
   path_string.assign(path);
   shell_escape_path(path_string);
@@ -868,7 +856,7 @@ static int adb_truncate(const char *path, off_t size) {
   command.append(path_string);
   command.append("'");
   cout << command << "\n";
-  output = adb_shell(command);
+  output                      = adb_shell(command);
   vector<string> output_chunk = make_array(output.front());
   if (output_chunk[0][0] == '/') {
     adb_pull(path_string, local_path_string);
@@ -878,8 +866,7 @@ static int adb_truncate(const char *path, off_t size) {
 
   invalidateCache(path_string);
 
-  cout << "truncate[path=" << local_path_string << "][size=" << size << "]"
-       << endl;
+  cout << "truncate[path=" << local_path_string << "][size=" << size << "]" << endl;
 
   return truncate(local_path_string.c_str(), size);
 }
@@ -911,7 +898,7 @@ static int adb_mkdir(const char *path, mode_t mode) {
   string local_path_string;
   path_string.assign(path);
   fileData[path_string].timestamp = fileData[path_string].timestamp + 50;
-  local_path_string = tempDirPath;
+  local_path_string               = tempDirPath;
   local_path_string.append(to_local_path(path_string));
   path_string.assign(path);
 
@@ -961,7 +948,7 @@ static int adb_rmdir(const char *path) {
   string local_path_string;
   path_string.assign(path);
   fileData[path_string].timestamp = fileData[path_string].timestamp + 50;
-  local_path_string = tempDirPath;
+  local_path_string               = tempDirPath;
   local_path_string.append(to_local_path(path_string));
   path_string.assign(path);
 
@@ -985,7 +972,7 @@ static int adb_unlink(const char *path) {
   string local_path_string;
   path_string.assign(path);
   fileData[path_string].timestamp = fileData[path_string].timestamp + 50;
-  local_path_string = tempDirPath;
+  local_path_string               = tempDirPath;
   local_path_string.append(to_local_path(path_string));
   path_string.assign(path);
 
@@ -1011,15 +998,14 @@ static int adb_readlink(const char *path, char *buf, size_t size) {
   queue<string> output;
 
   // get the number of slashes in the path
-  int num_slashes, ii;
+  size_t num_slashes, ii;
   for (num_slashes = ii = 0; ii < strlen(path); ii++)
     if (path[ii] == '/')
       num_slashes++;
   if (num_slashes >= 1)
     num_slashes--;
 
-  if (fileData.find(path_string) == fileData.end() ||
-      fileData[path_string].timestamp + 30 < time(NULL)) {
+  if (fileData.find(path_string) == fileData.end() || fileData[path_string].timestamp + 30 < time(NULL)) {
     string command = "ls -l -a -d '";
     command.append(path_string);
     command.append("'");
@@ -1028,10 +1014,12 @@ static int adb_readlink(const char *path, char *buf, size_t size) {
       return -EINVAL;
     // error format: "/sbin/healthd: Permission denied"
 
-    if ((output.front().length() > sizeof(PERMISSION_ERR_MSG)) &&
-        (!output.front().compare(
-            output.front().length() - sizeof(PERMISSION_ERR_MSG) + 1,
-            sizeof(PERMISSION_ERR_MSG) - 1, PERMISSION_ERR_MSG))) {
+    if ((output.front().length() > sizeof(PERMISSION_ERR_MSG))
+        && (!output.front().compare(
+          output.front().length() - sizeof(PERMISSION_ERR_MSG) + 1,
+          sizeof(PERMISSION_ERR_MSG) - 1,
+          PERMISSION_ERR_MSG
+        ))) {
       fileData[path_string].statOutput.erase();
     } else {
       fileData[path_string].statOutput = output.front();
@@ -1054,7 +1042,7 @@ static int adb_readlink(const char *path, char *buf, size_t size) {
     return -EINVAL;
   pos += 4;
   size_t my_size = res.size();
-  buf[0] = 0;
+  buf[0]         = 0;
   if (res[pos] == '/') {
     while (res[pos] == '/')
       ++pos;
@@ -1071,6 +1059,12 @@ static int adb_readlink(const char *path, char *buf, size_t size) {
   return 0;
 }
 
+// provides no-op chmod
+static int adb_chmod(const char *, mode_t) { return 0; }
+
+// provides no-op chmod
+static int adb_chown(const char *, uid_t, gid_t) { return 0; }
+
 /**
    Main struct for FUSE interface.
  */
@@ -1086,22 +1080,24 @@ int main(int argc, char *argv[]) {
   signal(SIGSEGV, handler); // install our handler
   makeTmpDir();
   memset(&adbfs_oper, 0, sizeof(adbfs_oper));
-  adbfs_oper.readdir = adb_readdir;
-  adbfs_oper.getattr = adb_getattr;
-  adbfs_oper.access = adb_access;
-  adbfs_oper.open = adb_open;
-  adbfs_oper.flush = adb_flush;
-  adbfs_oper.release = adb_release;
-  adbfs_oper.read = adb_read;
-  adbfs_oper.write = adb_write;
-  adbfs_oper.utimens = adb_utimens;
+  adbfs_oper.readdir  = adb_readdir;
+  adbfs_oper.getattr  = adb_getattr;
+  adbfs_oper.access   = adb_access;
+  adbfs_oper.open     = adb_open;
+  adbfs_oper.flush    = adb_flush;
+  adbfs_oper.release  = adb_release;
+  adbfs_oper.read     = adb_read;
+  adbfs_oper.write    = adb_write;
+  adbfs_oper.utimens  = adb_utimens;
   adbfs_oper.truncate = adb_truncate;
-  adbfs_oper.mknod = adb_mknod;
-  adbfs_oper.mkdir = adb_mkdir;
-  adbfs_oper.rename = adb_rename;
-  adbfs_oper.rmdir = adb_rmdir;
-  adbfs_oper.unlink = adb_unlink;
+  adbfs_oper.mknod    = adb_mknod;
+  adbfs_oper.mkdir    = adb_mkdir;
+  adbfs_oper.rename   = adb_rename;
+  adbfs_oper.rmdir    = adb_rmdir;
+  adbfs_oper.unlink   = adb_unlink;
   adbfs_oper.readlink = adb_readlink;
+  adbfs_oper.chmod    = adb_chmod;
+  adbfs_oper.chown    = adb_chown;
   adb_shell("ls");
 
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
